@@ -1,5 +1,4 @@
 flask
-selenium
+playwright
 pymsteams
-webdriver-manager
 gunicorn
