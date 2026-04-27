@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DB 방문 신청 대시보드</title>
+    <style>
+        :root {
+            --primary: #2c3e50;
+            --accent: #27ae60;
+            --bg: #f4f7f6;
+            --card-bg: #ffffff;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg);
+            color: var(--primary);
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            background-color: var(--card-bg);
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            width: 90%;
+            max-width: 800px;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 2rem;
+            font-weight: 300;
+            color: var(--primary);
+        }
+        .section {
+            margin-bottom: 1.5rem;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: bold;
+        }
+        select, .date-grid, .colleague-grid {
+            width: 100%;
+            padding: 0.8rem;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 1rem;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 10px;
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 6px;
+        }
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+        .checkbox-item input {
+            margin-right: 8px;
+        }
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 2rem;
+        }
+        button {
+            flex: 1;
+            padding: 1rem;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .btn-apply {
+            background-color: var(--accent);
+            color: white;
+            font-weight: bold;
+        }
+        .btn-apply:hover {
+            background-color: #219150;
+        }
+        .btn-clear {
+            background-color: #95a5a6;
+            color: white;
+        }
+        #status {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            border-radius: 6px;
+            text-align: center;
+            display: none;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 10px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DB 방문 신청 시스템</h1>
+        
+        <div class="section">
+            <label>신청자 선택</label>
+            <select id="applicant">
+                {% for name in applicants.keys() %}
+                <option value="{{ name }}">{{ name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="section">
+            <label>담당자 선택</label>
+            <select id="customer">
+                {% for cust in customers %}
+                <option value="{{ cust }}">{{ cust }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="section">
+            <label>방문 날짜 선택 (복수 선택 가능)</label>
+            <div class="grid" id="date-grid">
+                {% for d in dates %}
+                <label class="checkbox-item">
+                    <input type="checkbox" name="dates" value="{{ d.val }}"> {{ d.label }}
+                </label>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="section">
+            <label>동행 동료 선택 (노트북 SN 추가)</label>
+            <div class="grid" id="colleague-grid">
+                {% for name in applicants.keys() %}
+                <label class="checkbox-item colleague-item" data-name="{{ name }}">
+                    <input type="checkbox" name="colleagues" value="{{ name }}"> {{ name }}
+                </label>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="btn-apply" onclick="submitForm()">신청하기</button>
+            <button class="btn-clear" onclick="clearForm()">초기화</button>
+        </div>
+
+        <div id="status"></div>
+    </div>
+
+    <script>
+        // 신청자 본인은 동료 목록에서 선택하지 못하도록 처리
+        const applicantSelect = document.getElementById('applicant');
+        const colleagueItems = document.querySelectorAll('.colleague-item');
+
+        function updateColleagueList() {
+            const currentApplicant = applicantSelect.value;
+            colleagueItems.forEach(item => {
+                const checkbox = item.querySelector('input');
+                if (item.dataset.name === currentApplicant) {
+                    item.style.display = 'none';
+                    checkbox.checked = false;
+                } else {
+                    item.style.display = 'flex';
+                }
+            });
+        }
+
+        applicantSelect.addEventListener('change', updateColleagueList);
+        updateColleagueList();
+
+        async function submitForm() {
+            const statusDiv = document.getElementById('status');
+            const dates = Array.from(document.querySelectorAll('input[name="dates"]:checked')).map(cb => cb.value);
+            const colleagues = Array.from(document.querySelectorAll('input[name="colleagues"]:checked')).map(cb => cb.value);
+            
+            if (dates.length === 0) {
+                alert('최소 하나 이상의 날짜를 선택해주세요.');
+                return;
+            }
+
+            statusDiv.style.display = 'block';
+            statusDiv.style.backgroundColor = '#3498db';
+            statusDiv.style.color = 'white';
+            statusDiv.innerHTML = '<span class="loading"></span>신청 프로세스가 진행 중입니다. 잠시만 기다려주세요...';
+
+            const payload = {
+                applicant: applicantSelect.value,
+                customer: document.getElementById('customer').value,
+                dates: dates,
+                colleagues: colleagues
+            };
+
+            try {
+                const response = await fetch('/apply', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                
+                statusDiv.style.backgroundColor = '#27ae60';
+                statusDiv.innerHTML = '신청이 완료되었습니다! MS Teams 메시지를 확인하세요.';
+            } catch (error) {
+                statusDiv.style.backgroundColor = '#e74c3c';
+                statusDiv.innerHTML = '오류가 발생했습니다: ' + error.message;
+            }
+        }
+
+        function clearForm() {
+            document.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+            document.getElementById('status').style.display = 'none';
+        }
+    </script>
+</body>
+</html>
