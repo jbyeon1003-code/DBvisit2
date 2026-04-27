@@ -1,5 +1,6 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 import time
+import json
 from multiprocessing import Pool
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -20,7 +21,7 @@ app = Flask(__name__)
 
 TEAMS_URL = "https://asml.webhook.office.com/webhookb2/345970d0-d1e6-4432-b01a-b0018f62458d@af73baa8-f594-4eb2-a39d-93e96cad61fc/IncomingWebhook/0f1ede623d814ee6a9fe2175299cc5aa/263ad6e2-5556-4f9c-a7e1-bbd25a18ca4e/V2-w_v_LbU_NMXQxLYq0iv3sQj92pAcolXIygxRJ8zBiY1"
 
-# 데이터 정의
+# 데이터 정의 (기존과 동일)
 APPLICANTS = {
     '한준석': {'name': '한준석\t19770103', 'SN': 'PF32SF80(JS)'},
     '최선국': {'name': '최선국\t19790503', 'SN': 'PF35R8Y6(SK)'},
@@ -49,24 +50,21 @@ def run_selenium_task(data):
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--lang=ko")
-    
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1440,900")
+    chrome_options.binary_location = "/usr/bin/google-chrome"
     
     try:
-        url = 'https://ims.dbhitek.com/'
-        driver.set_window_size(1440, 900)
-        driver.get(url)
-
-        # (기존 신청 로직과 동일...)
-        wait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[onclick="popRegVisit();"]'))).click()
-        driver.find_element(By.CSS_SELECTOR, 'input[type="checkbox"][name="ckAgree1"][value="Y"]').click()
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver.get('https://ims.dbhitek.com/')
+        
+        # 신청 로직 (압축)
+        wait(driver, 15).until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[onclick="popRegVisit();"]'))).click()
+        wait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="ckAgree1"]'))).click()
         
         location_select = Select(driver.find_element(By.NAME, 'Location'))
-        if customer == '안현진':
-            location_select.select_by_visible_text('DB HiTek 부천캠퍼스')
-        else:
-            location_select.select_by_visible_text('DB HiTek 상우캠퍼스')
+        location_select.select_by_visible_text('DB HiTek 부천캠퍼스' if customer == '안현진' else 'DB HiTek 상우캠퍼스')
 
         date_input = driver.find_element(By.CSS_SELECTOR, 'input[name="VisitStartDate"]')
         date_input.clear()
@@ -75,28 +73,21 @@ def run_selenium_task(data):
 
         driver.find_element(By.CSS_SELECTOR, 'input[name="ContactName"]').click()
         time.sleep(1)
-        cust_input = driver.find_element(By.CSS_SELECTOR, 'input[name="Name"]')
+        cust_input = wait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="Name"]')))
         cust_input.send_keys(customer)
         cust_input.send_keys(Keys.ENTER)
-        
-        wait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#dvSearchPersonList > tbody > tr'))).click()
+        wait(driver, 15).until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#dvSearchPersonList > tbody > tr'))).click()
 
-        place_select = Select(driver.find_element(By.NAME, 'PlaceCodeID'))
-        if customer == '안현진':
-            place_select.select_by_visible_text('부천캠퍼스 FAB동')
-        else:
-            place_select.select_by_visible_text('상우캠퍼스 어드민동')
-
+        place_select = Select(wait(driver, 10).until(EC.presence_of_element_located((By.NAME, 'PlaceCodeID'))))
+        place_select.select_by_visible_text('부천캠퍼스 FAB동' if customer == '안현진' else '상우캠퍼스 어드민동')
         Select(driver.find_element(By.NAME, 'VisitPurposeCodeID')).select_by_visible_text('공사/수리/Setup')
         driver.find_element(By.CSS_SELECTOR, 'input[name="Name[]"]').send_keys(applicant['name'])
 
         button = driver.find_element(By.CSS_SELECTOR, 'button.btn-green[onclick="goCarryItem(this);"]')
         driver.execute_script("arguments[0].click();", button)
         time.sleep(1)
-
         Select(driver.find_element(By.NAME, 'ImportPurposeCodeID')).select_by_visible_text('기타')
         Select(driver.find_element(By.NAME, 'CarryItemCodeID')).select_by_visible_text('노트북 및 PC')
-
         driver.find_element(By.CSS_SELECTOR, 'input[name="ItemName"]').send_keys('노트북')
         driver.find_element(By.CSS_SELECTOR, 'input[name="ItemSN"]').send_keys(applicant['SN'])
         driver.find_element(By.CSS_SELECTOR, 'input[name="Quantity"]').send_keys('1')
@@ -104,30 +95,28 @@ def run_selenium_task(data):
         for idx, sn in enumerate(serial_nums):
             driver.find_element(By.CSS_SELECTOR, '#btn-add-carryitem').click()
             time.sleep(0.5)
-            add_items = driver.find_elements(By.XPATH, "//*[@id='reg-form-wrap-carryitem']/ul/li[2]/div[2]/input")
-            add_sns = driver.find_elements(By.XPATH, "//*[@id='reg-form-wrap-carryitem']/ul/li[3]/div[2]/input")
-            add_nums = driver.find_elements(By.XPATH, "//*[@id='reg-form-wrap-carryitem']/ul/li[6]/div[2]/input")
-            add_items[idx+1].send_keys('노트북')
-            add_sns[idx+1].send_keys(sn)
-            add_nums[idx+1].send_keys('1')
+            driver.find_elements(By.XPATH, "//*[@id='reg-form-wrap-carryitem']/ul/li[2]/div[2]/input")[idx+1].send_keys('노트북')
+            driver.find_elements(By.XPATH, "//*[@id='reg-form-wrap-carryitem']/ul/li[3]/div[2]/input")[idx+1].send_keys(sn)
+            driver.find_elements(By.XPATH, "//*[@id='reg-form-wrap-carryitem']/ul/li[6]/div[2]/input")[idx+1].send_keys('1')
 
         driver.find_element(By.CLASS_NAME, "pop-btn-green").click()
         time.sleep(1)
-
         driver.find_element(By.CSS_SELECTOR, 'input[type="checkbox"][name="ckAgree2"][value="Y"]').click()
         driver.find_element(By.CSS_SELECTOR, 'button.btn-req[onclick="saveVisitForm()"]').click()
-        Alert(driver).accept()
+        try:
+            wait(driver, 5).until(EC.alert_is_present())
+            driver.switch_to.alert.accept()
+        except: pass
         
         myTeamsMessage = pymsteams.connectorcard(TEAMS_URL)
-        myTeamsMessage.text(f"{date_str} 신청 완료. 방문객: {applicant['name'][:3]}, 담당자: {customer}, 추가: {serial_nums}")
+        myTeamsMessage.text(f"[{date_str}] 신청 완료\n방문객: {applicant['name'][:3]}\n담당자: {customer}")
         myTeamsMessage.send()
-        
         return True
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"ERROR: {str(e)}")
         return False
     finally:
-        driver.quit()
+        if 'driver' in locals(): driver.quit()
 
 @app.route('/')
 def index():
@@ -136,10 +125,7 @@ def index():
     weekday_map = ['(월)', '(화)', '(수)', '(목)', '(금)', '(토)', '(일)']
     for i in range(14):
         target = now + timedelta(days=i)
-        dates.append({
-            'val': target.strftime('%Y-%m-%d'),
-            'label': target.strftime('%Y-%m-%d') + " " + weekday_map[target.weekday()]
-        })
+        dates.append({'val': target.strftime('%Y-%m-%d'), 'label': target.strftime('%Y-%m-%d') + " " + weekday_map[target.weekday()]})
     return render_template('index.html', applicants=APPLICANTS, customers=CUSTOMERS, dates=dates)
 
 @app.route('/apply', methods=['POST'])
@@ -153,16 +139,22 @@ def apply():
     applicant = APPLICANTS.get(applicant_key)
     serial_nums = [APPLICANTS[c]['SN'] for c in colleagues if c in APPLICANTS]
     
-    tasks = []
-    for d in selected_dates:
-        tasks.append({'date': d, 'applicant': applicant, 'customer': customer, 'serial_nums': serial_nums})
+    tasks = [{'date': d, 'applicant': applicant, 'customer': customer, 'serial_nums': serial_nums} for d in selected_dates]
     
-    with Pool(processes=min(len(tasks), 4)) as pool:
-        results = pool.map(run_selenium_task, tasks)
-    
-    return jsonify({'status': 'success', 'results': results})
+    def generate():
+        total = len(tasks)
+        completed = 0
+        # 실시간 진행률 스트리밍 시작
+        yield json.dumps({'progress': 0, 'message': '준비 중...'}) + "\n"
+        
+        with Pool(processes=2) as pool:
+            for result in pool.imap_unordered(run_selenium_task, tasks):
+                completed += 1
+                progress = int((completed / total) * 100)
+                yield json.dumps({'progress': progress, 'message': f'{completed}/{total} 완료됨'}) + "\n"
+
+    return Response(stream_with_context(generate()), mimetype='application/json')
 
 if __name__ == '__main__':
-    # 클라우드 서버는 포트를 0.0.0.0으로 열어야 합니다.
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
