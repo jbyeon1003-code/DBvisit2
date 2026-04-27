@@ -9,8 +9,7 @@ import pymsteams
 
 app = Flask(__name__)
 
-TEAMS_URL = "https://asml.webhook.office.com/webhookb2/345970d0-d1e6-4432-b01a-b0018f62458d@af73baa8-f594-4eb2-a39d-93e96cad61fc/IncomingWebhook/0f1ede623d814ee6a9fe2175299cc5aa/263ad6e2-5556-4f9c-a7e1-bbd25a18ca4e/V2-w_v_LbU_NMXQxLYq0iv3sQj92pAcolXIygxRJ8zBiY1"
-
+# 데이터 정의 (기존과 동일)
 APPLICANTS = {
     '한준석': {'name': '한준석\t19770103', 'SN': 'PF32SF80(JS)'},
     '최선국': {'name': '최선국\t19790503', 'SN': 'PF35R8Y6(SK)'},
@@ -27,6 +26,7 @@ APPLICANTS = {
     '박찬순': {'name': '박찬순\t19990407', 'SN': 'PF4SLTEF(CS)'}
 }
 CUSTOMERS = ['채명주', '이영휘', '서형석', '윤여철', '박종우', '안현진']
+TEAMS_URL = "https://asml.webhook.office.com/webhookb2/345970d0-d1e6-4432-b01a-b0018f62458d@af73baa8-f594-4eb2-a39d-93e96cad61fc/IncomingWebhook/0f1ede623d814ee6a9fe2175299cc5aa/263ad6e2-5556-4f9c-a7e1-bbd25a18ca4e/V2-w_v_LbU_NMXQxLYq0iv3sQj92pAcolXIygxRJ8zBiY1"
 
 def run_visit_task(data):
     date_str = data['date']
@@ -35,51 +35,41 @@ def run_visit_task(data):
     serial_nums = data['serial_nums']
 
     with sync_playwright() as p:
-        # 브라우저 실행 (이미지 로딩 차단으로 속도 최적화)
-        browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
-        context = browser.new_context(viewport={'width': 1280, 'height': 800}, locale='ko-KR')
+        # 초경량 모드로 브라우저 실행
+        browser = p.chromium.launch(headless=True, args=[
+            '--no-sandbox', 
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage', # 메모리 부족 방지 핵심 설정
+            '--single-process'         # 메모리 사용량 최소화
+        ])
+        context = browser.new_context(locale='ko-KR')
         page = context.new_page()
-        
-        # 이미지 로딩 제외 (속도 향상 및 데이터 절약)
-        page.route("**/*.{png,jpg,jpeg,gif,svg}", lambda route: route.abort())
+        page.route("**/*.{png,jpg,jpeg,gif,svg,css,woff2}", lambda route: route.abort()) # CSS까지 차단하여 속도 극대화
 
         try:
-            page.goto('https://ims.dbhitek.com/', wait_until='networkidle', timeout=60000)
-            
-            # 1. 팝업 열기
+            page.goto('https://ims.dbhitek.com/', timeout=60000)
             page.click('button[onclick="popRegVisit();"]')
-            
-            # 2. 동의
-            page.wait_for_selector('input[name="ckAgree1"]')
+            page.wait_for_selector('input[name="ckAgree1"]', timeout=30000)
             page.click('input[name="ckAgree1"]')
             
-            # 3. 캠퍼스 선택
             target_campus = '부천캠퍼스' if customer == '안현진' else '상우캠퍼스'
             page.select_option('select[name="Location"]', label=f'DB HiTek {target_campus}')
-            
-            # 4. 날짜 입력
             page.fill('input[name="VisitStartDate"]', date_str)
             page.keyboard.press('Enter')
 
-            # 5. 담당자 검색
             page.click('input[name="ContactName"]')
             page.wait_for_selector('input[name="Name"]')
             page.fill('input[name="Name"]', customer)
             page.keyboard.press('Enter')
-            
-            # 검색 결과 클릭
-            page.wait_for_selector('#dvSearchPersonList > tbody > tr')
+            page.wait_for_selector('#dvSearchPersonList > tbody > tr', timeout=30000)
             page.click('#dvSearchPersonList > tbody > tr')
 
-            # 6. 세부 장소 선택
+            page.wait_for_selector('select[name="PlaceCodeID"]')
             target_place = '부천캠퍼스 FAB동' if customer == '안현진' else '상우캠퍼스 어드민동'
             page.select_option('select[name="PlaceCodeID"]', label=target_place)
             page.select_option('select[name="VisitPurposeCodeID"]', label='공사/수리/Setup')
-            
-            # 7. 신청자 정보
             page.fill('input[name="Name[]"]', applicant['name'])
 
-            # 8. 휴대물품 등록
             page.click('button.btn-green[onclick="goCarryItem(this);"]')
             page.wait_for_selector('select[name="ImportPurposeCodeID"]')
             page.select_option('select[name="ImportPurposeCodeID"]', label='기타')
@@ -90,24 +80,16 @@ def run_visit_task(data):
 
             for sn in serial_nums:
                 page.click('#btn-add-carryitem')
-                # 추가된 입력창들 중 마지막 요소에 입력
                 page.locator('input[name="ItemName[]"]').last.fill('노트북')
                 page.locator('input[name="ItemSN[]"]').last.fill(sn)
                 page.locator('input[name="Quantity[]"]').last.fill('1')
 
             page.click('.pop-btn-green')
-            
-            # 9. 최종 신청
             page.click('input[name="ckAgree2"]')
-            
-            # Alert 자동 수락 설정
             page.on("dialog", lambda dialog: dialog.accept())
             page.click('button.btn-req[onclick="saveVisitForm()"]')
-            
-            # 잠시 대기 후 완료
             time.sleep(2)
             
-            # 10. 알림
             myTeamsMessage = pymsteams.connectorcard(TEAMS_URL)
             myTeamsMessage.text(f"[{date_str}] 신청 완료: {applicant['name'][:3]} -> {customer}")
             myTeamsMessage.send()
@@ -130,27 +112,29 @@ def index():
 
 @app.route('/apply', methods=['POST'])
 def apply():
-    form_data = request.json
-    selected_dates = form_data.get('dates', [])
-    applicant_key = form_data.get('applicant')
-    customer = form_data.get('customer')
-    colleagues = form_data.get('colleagues', [])
-    
-    applicant = APPLICANTS.get(applicant_key)
-    serial_nums = [APPLICANTS[c]['SN'] for c in colleagues if c in APPLICANTS]
-    tasks = [{'date': d, 'applicant': applicant, 'customer': customer, 'serial_nums': serial_nums} for d in selected_dates]
-    
-    def generate():
-        total = len(tasks)
-        yield json.dumps({'progress': 5, 'message': '엔진 시동 중 (Playwright)...'}) + "\n"
+    try:
+        form_data = request.json
+        selected_dates = form_data.get('dates', [])
+        applicant_key = form_data.get('applicant')
+        customer = form_data.get('customer')
+        colleagues = form_data.get('colleagues', [])
         
-        for i, task in enumerate(tasks):
-            success = run_visit_task(task)
-            progress = int(((i + 1) / total) * 100)
-            status = "성공" if success else "실패"
-            yield json.dumps({'progress': progress, 'message': f'[{task["date"]}] {status}'}) + "\n"
+        applicant = APPLICANTS.get(applicant_key)
+        serial_nums = [APPLICANTS[c]['SN'] for c in colleagues if c in APPLICANTS]
+        tasks = [{'date': d, 'applicant': applicant, 'customer': customer, 'serial_nums': serial_nums} for d in selected_dates]
+        
+        def generate():
+            total = len(tasks)
+            yield json.dumps({'progress': 5, 'message': '엔진 시동 중...'}) + "\n"
+            for i, task in enumerate(tasks):
+                success = run_visit_task(task)
+                progress = int(((i + 1) / total) * 100)
+                status = "성공" if success else "실패"
+                yield json.dumps({'progress': progress, 'message': f'[{task["date"]}] {status}'}) + "\n"
 
-    return Response(stream_with_context(generate()), mimetype='application/json')
+        return Response(stream_with_context(generate()), mimetype='application/json')
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))

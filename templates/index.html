@@ -20,7 +20,6 @@
         .btn-apply { background-color: var(--accent); color: white; font-weight: bold; }
         .btn-clear { background-color: #95a5a6; color: white; }
         
-        /* 프로그래스 바 스타일 */
         #status-container { margin-top: 1.5rem; display: none; }
         .progress-wrapper { width: 100%; background-color: #ddd; border-radius: 20px; height: 25px; overflow: hidden; margin-top: 10px; }
         #progress-bar { width: 0%; height: 100%; background-color: var(--accent); transition: width 0.4s ease; text-align: center; color: white; line-height: 25px; font-size: 0.8rem; font-weight: bold; }
@@ -107,7 +106,6 @@
             
             if (dates.length === 0) return alert('날짜를 선택해주세요.');
 
-            // UI 초기화
             submitBtn.disabled = true;
             statusContainer.style.display = 'block';
             progressBar.style.width = '0%';
@@ -126,7 +124,11 @@
                     })
                 });
 
-                // 실시간 스트림 읽기
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`서버 에러 (${response.status}): ${errorText.substring(0, 100)}...`);
+                }
+
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
 
@@ -138,14 +140,14 @@
                     const lines = chunk.split('\n').filter(line => line.trim());
                     
                     for (const line of lines) {
-                        const data = JSON.parse(line);
-                        progressBar.style.width = data.progress + '%';
-                        progressBar.innerText = data.progress + '%';
-                        statusMessage.innerText = data.message;
-                        
-                        if (data.progress === 100) {
-                            statusMessage.innerText = '✅ 모든 신청이 완료되었습니다!';
-                            submitBtn.disabled = false;
+                        try {
+                            const data = JSON.parse(line);
+                            progressBar.style.width = data.progress + '%';
+                            progressBar.innerText = data.progress + '%';
+                            statusMessage.innerText = data.message;
+                            if (data.progress === 100) submitBtn.disabled = false;
+                        } catch (e) {
+                            console.error('JSON 파싱 에러:', line);
                         }
                     }
                 }
