@@ -3,7 +3,9 @@ import time
 from multiprocessing import Pool
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.edge.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.support.select import Select
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.alert import Alert
@@ -43,41 +45,34 @@ def run_selenium_task(data):
     customer = data['customer']
     serial_nums = data['serial_nums']
     
-    options = Options()
-    options.add_experimental_option('detach', True)
-    options.add_experimental_option('excludeSwitches', ['enable-logging'])
-    options.add_argument("lang=ko")
-    options.add_argument('--disable-popup-blocking')
-    options.page_load_strategy = 'eager'
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--lang=ko")
     
-    os.environ["SE_DRIVER_MIRROR_URL"] = "https://msedgedriver.microsoft.com"
-    driver = webdriver.Edge(options=options)
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
     
     try:
         url = 'https://ims.dbhitek.com/'
         driver.set_window_size(1440, 900)
         driver.get(url)
 
-        # 방문 신청 버튼
+        # (기존 신청 로직과 동일...)
         wait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[onclick="popRegVisit();"]'))).click()
-
-        # 필수 동의
         driver.find_element(By.CSS_SELECTOR, 'input[type="checkbox"][name="ckAgree1"][value="Y"]').click()
         
-        # 위치 선택
         location_select = Select(driver.find_element(By.NAME, 'Location'))
         if customer == '안현진':
             location_select.select_by_visible_text('DB HiTek 부천캠퍼스')
         else:
             location_select.select_by_visible_text('DB HiTek 상우캠퍼스')
 
-        # 날짜 입력
         date_input = driver.find_element(By.CSS_SELECTOR, 'input[name="VisitStartDate"]')
         date_input.clear()
         date_input.send_keys(date_str)
         date_input.send_keys(Keys.ENTER)
 
-        # 담당자 검색
         driver.find_element(By.CSS_SELECTOR, 'input[name="ContactName"]').click()
         time.sleep(1)
         cust_input = driver.find_element(By.CSS_SELECTOR, 'input[name="Name"]')
@@ -86,7 +81,6 @@ def run_selenium_task(data):
         
         wait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#dvSearchPersonList > tbody > tr'))).click()
 
-        # 세부 장소 및 목적
         place_select = Select(driver.find_element(By.NAME, 'PlaceCodeID'))
         if customer == '안현진':
             place_select.select_by_visible_text('부천캠퍼스 FAB동')
@@ -94,11 +88,8 @@ def run_selenium_task(data):
             place_select.select_by_visible_text('상우캠퍼스 어드민동')
 
         Select(driver.find_element(By.NAME, 'VisitPurposeCodeID')).select_by_visible_text('공사/수리/Setup')
-
-        # 신청자 입력
         driver.find_element(By.CSS_SELECTOR, 'input[name="Name[]"]').send_keys(applicant['name'])
 
-        # 휴대물품 등록
         button = driver.find_element(By.CSS_SELECTOR, 'button.btn-green[onclick="goCarryItem(this);"]')
         driver.execute_script("arguments[0].click();", button)
         time.sleep(1)
@@ -110,14 +101,12 @@ def run_selenium_task(data):
         driver.find_element(By.CSS_SELECTOR, 'input[name="ItemSN"]').send_keys(applicant['SN'])
         driver.find_element(By.CSS_SELECTOR, 'input[name="Quantity"]').send_keys('1')
 
-        # 추가 노트북
         for idx, sn in enumerate(serial_nums):
             driver.find_element(By.CSS_SELECTOR, '#btn-add-carryitem').click()
             time.sleep(0.5)
             add_items = driver.find_elements(By.XPATH, "//*[@id='reg-form-wrap-carryitem']/ul/li[2]/div[2]/input")
             add_sns = driver.find_elements(By.XPATH, "//*[@id='reg-form-wrap-carryitem']/ul/li[3]/div[2]/input")
             add_nums = driver.find_elements(By.XPATH, "//*[@id='reg-form-wrap-carryitem']/ul/li[6]/div[2]/input")
-            
             add_items[idx+1].send_keys('노트북')
             add_sns[idx+1].send_keys(sn)
             add_nums[idx+1].send_keys('1')
@@ -125,13 +114,10 @@ def run_selenium_task(data):
         driver.find_element(By.CLASS_NAME, "pop-btn-green").click()
         time.sleep(1)
 
-        # 선택 동의 및 신청
         driver.find_element(By.CSS_SELECTOR, 'input[type="checkbox"][name="ckAgree2"][value="Y"]').click()
         driver.find_element(By.CSS_SELECTOR, 'button.btn-req[onclick="saveVisitForm()"]').click()
-        
         Alert(driver).accept()
         
-        # Teams 알림
         myTeamsMessage = pymsteams.connectorcard(TEAMS_URL)
         myTeamsMessage.text(f"{date_str} 신청 완료. 방문객: {applicant['name'][:3]}, 담당자: {customer}, 추가: {serial_nums}")
         myTeamsMessage.send()
@@ -145,7 +131,6 @@ def run_selenium_task(data):
 
 @app.route('/')
 def index():
-    # 다음 14일간의 날짜 리스트 생성
     dates = []
     now = datetime.datetime.now()
     weekday_map = ['(월)', '(화)', '(수)', '(목)', '(금)', '(토)', '(일)']
@@ -170,18 +155,14 @@ def apply():
     
     tasks = []
     for d in selected_dates:
-        tasks.append({
-            'date': d,
-            'applicant': applicant,
-            'customer': customer,
-            'serial_nums': serial_nums
-        })
+        tasks.append({'date': d, 'applicant': applicant, 'customer': customer, 'serial_nums': serial_nums})
     
-    # 멀티프로세싱 실행
     with Pool(processes=min(len(tasks), 4)) as pool:
         results = pool.map(run_selenium_task, tasks)
     
     return jsonify({'status': 'success', 'results': results})
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # 클라우드 서버는 포트를 0.0.0.0으로 열어야 합니다.
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)

@@ -1,0 +1,5 @@
+flask
+selenium
+pymsteams
+webdriver-manager
+gunicorn
