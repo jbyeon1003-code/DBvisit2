@@ -1,7 +1,6 @@
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 import time
 import json
-from multiprocessing import Pool
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
@@ -21,7 +20,7 @@ app = Flask(__name__)
 
 TEAMS_URL = "https://asml.webhook.office.com/webhookb2/345970d0-d1e6-4432-b01a-b0018f62458d@af73baa8-f594-4eb2-a39d-93e96cad61fc/IncomingWebhook/0f1ede623d814ee6a9fe2175299cc5aa/263ad6e2-5556-4f9c-a7e1-bbd25a18ca4e/V2-w_v_LbU_NMXQxLYq0iv3sQj92pAcolXIygxRJ8zBiY1"
 
-# 데이터 정의 (기존과 동일)
+# 데이터 정의 (생략 - 기존과 동일)
 APPLICANTS = {
     '한준석': {'name': '한준석\t19770103', 'SN': 'PF32SF80(JS)'},
     '최선국': {'name': '최선국\t19790503', 'SN': 'PF35R8Y6(SK)'},
@@ -37,7 +36,6 @@ APPLICANTS = {
     '이수한': {'name': '이수한\t19980309', 'SN': 'PF4SLTF9(SH)'},
     '박찬순': {'name': '박찬순\t19990407', 'SN': 'PF4SLTEF(CS)'}
 }
-
 CUSTOMERS = ['채명주', '이영휘', '서형석', '윤여철', '박종우', '안현진']
 
 def run_selenium_task(data):
@@ -54,39 +52,75 @@ def run_selenium_task(data):
     chrome_options.add_argument("--window-size=1440,900")
     chrome_options.binary_location = "/usr/bin/google-chrome"
     
+    # 한국어 설정 강제 적용
+    chrome_options.add_argument("--lang=ko_KR")
+    chrome_options.add_experimental_option("prefs", {"intl.accept_languages": "ko,ko_KR"})
+    
     try:
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=chrome_options)
         driver.get('https://ims.dbhitek.com/')
         
-        # 신청 로직 (압축)
-        wait(driver, 15).until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[onclick="popRegVisit();"]'))).click()
-        wait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="ckAgree1"]'))).click()
+        # 방문 신청 버튼 클릭
+        wait(driver, 20).until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[onclick="popRegVisit();"]'))).click()
         
-        location_select = Select(driver.find_element(By.NAME, 'Location'))
-        location_select.select_by_visible_text('DB HiTek 부천캠퍼스' if customer == '안현진' else 'DB HiTek 상우캠퍼스')
+        # 필수 동의 (대기 시간 강화)
+        wait(driver, 15).until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[name="ckAgree1"]'))).click()
+        
+        # 위치 선택 (텍스트가 아닌 '포함하는 글자'로 선택하도록 개선)
+        location_el = wait(driver, 10).until(EC.presence_of_element_located((By.NAME, 'Location')))
+        location_select = Select(location_el)
+        target_campus = '부천캠퍼스' if customer == '안현진' else '상우캠퍼스'
+        
+        found = False
+        for option in location_select.options:
+            if target_campus in option.text:
+                location_select.select_by_visible_text(option.text)
+                found = True
+                break
+        if not found:
+            raise Exception(f"캠퍼스 목록에서 '{target_campus}'를 찾을 수 없습니다.")
 
+        # 날짜 입력
         date_input = driver.find_element(By.CSS_SELECTOR, 'input[name="VisitStartDate"]')
         date_input.clear()
         date_input.send_keys(date_str)
         date_input.send_keys(Keys.ENTER)
 
+        # 담당자 검색
         driver.find_element(By.CSS_SELECTOR, 'input[name="ContactName"]').click()
-        time.sleep(1)
-        cust_input = wait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="Name"]')))
+        time.sleep(2)
+        cust_input = wait(driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="Name"]')))
         cust_input.send_keys(customer)
         cust_input.send_keys(Keys.ENTER)
-        wait(driver, 15).until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#dvSearchPersonList > tbody > tr'))).click()
+        
+        # 검색 결과 대기 및 클릭
+        wait(driver, 20).until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#dvSearchPersonList > tbody > tr'))).click()
+        time.sleep(1)
 
-        place_select = Select(wait(driver, 10).until(EC.presence_of_element_located((By.NAME, 'PlaceCodeID'))))
-        place_select.select_by_visible_text('부천캠퍼스 FAB동' if customer == '안현진' else '상우캠퍼스 어드민동')
+        # 세부 장소 선택 (개선된 방식 적용)
+        place_el = wait(driver, 15).until(EC.presence_of_element_located((By.NAME, 'PlaceCodeID')))
+        place_select = Select(place_el)
+        target_place = '부천캠퍼스 FAB동' if customer == '안현진' else '상우캠퍼스 어드민동'
+        
+        found_place = False
+        for opt in place_select.options:
+            if target_place in opt.text:
+                place_select.select_by_visible_text(opt.text)
+                found_place = True
+                break
+        if not found_place:
+            place_select.select_by_index(1) # 못 찾으면 첫 번째 항목이라도 선택
+
         Select(driver.find_element(By.NAME, 'VisitPurposeCodeID')).select_by_visible_text('공사/수리/Setup')
         driver.find_element(By.CSS_SELECTOR, 'input[name="Name[]"]').send_keys(applicant['name'])
 
+        # 휴대물품
         button = driver.find_element(By.CSS_SELECTOR, 'button.btn-green[onclick="goCarryItem(this);"]')
         driver.execute_script("arguments[0].click();", button)
-        time.sleep(1)
-        Select(driver.find_element(By.NAME, 'ImportPurposeCodeID')).select_by_visible_text('기타')
+        time.sleep(2)
+        
+        Select(wait(driver, 10).until(EC.presence_of_element_located((By.NAME, 'ImportPurposeCodeID')))).select_by_visible_text('기타')
         Select(driver.find_element(By.NAME, 'CarryItemCodeID')).select_by_visible_text('노트북 및 PC')
         driver.find_element(By.CSS_SELECTOR, 'input[name="ItemName"]').send_keys('노트북')
         driver.find_element(By.CSS_SELECTOR, 'input[name="ItemSN"]').send_keys(applicant['SN'])
@@ -103,17 +137,19 @@ def run_selenium_task(data):
         time.sleep(1)
         driver.find_element(By.CSS_SELECTOR, 'input[type="checkbox"][name="ckAgree2"][value="Y"]').click()
         driver.find_element(By.CSS_SELECTOR, 'button.btn-req[onclick="saveVisitForm()"]').click()
+        
         try:
             wait(driver, 5).until(EC.alert_is_present())
             driver.switch_to.alert.accept()
         except: pass
         
+        # Teams 알림
         myTeamsMessage = pymsteams.connectorcard(TEAMS_URL)
         myTeamsMessage.text(f"[{date_str}] 신청 완료\n방문객: {applicant['name'][:3]}\n담당자: {customer}")
         myTeamsMessage.send()
         return True
     except Exception as e:
-        print(f"ERROR: {str(e)}")
+        print(f"FAIL: {date_str} - {str(e)}")
         return False
     finally:
         if 'driver' in locals(): driver.quit()
@@ -138,20 +174,20 @@ def apply():
     
     applicant = APPLICANTS.get(applicant_key)
     serial_nums = [APPLICANTS[c]['SN'] for c in colleagues if c in APPLICANTS]
-    
     tasks = [{'date': d, 'applicant': applicant, 'customer': customer, 'serial_nums': serial_nums} for d in selected_dates]
     
     def generate():
         total = len(tasks)
         completed = 0
-        # 실시간 진행률 스트리밍 시작
-        yield json.dumps({'progress': 0, 'message': '준비 중...'}) + "\n"
+        yield json.dumps({'progress': 5, 'message': '엔진 가동 중...'}) + "\n"
         
-        with Pool(processes=2) as pool:
-            for result in pool.imap_unordered(run_selenium_task, tasks):
-                completed += 1
-                progress = int((completed / total) * 100)
-                yield json.dumps({'progress': progress, 'message': f'{completed}/{total} 완료됨'}) + "\n"
+        # Render 무료 플랜 안정성을 위해 순차적으로 처리 (1개씩)
+        for task in tasks:
+            success = run_selenium_task(task)
+            completed += 1
+            progress = int((completed / total) * 100)
+            status = "✅ 성공" if success else "❌ 실패 (로그 확인)"
+            yield json.dumps({'progress': progress, 'message': f'[{task["date"]}] {status} ({completed}/{total})'}) + "\n"
 
     return Response(stream_with_context(generate()), mimetype='application/json')
 
