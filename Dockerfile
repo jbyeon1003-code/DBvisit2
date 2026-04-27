@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     gnupg \
     unzip \
     curl \
+    ca-certificates \
     fonts-liberation \
     libnss3 \
     libatk-bridge2.0-0 \
@@ -14,8 +15,8 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     xdg-utils \
     --no-install-recommends \
-    && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list' \
+    && curl -fSsL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor | tee /usr/share/keyrings/google-chrome.gpg > /dev/null \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update && apt-get install -y google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
@@ -27,5 +28,4 @@ COPY . .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 5. 서버 실행 (Gunicorn 사용)
-# Render에서 제공하는 PORT 환경변수를 사용합니다.
 CMD gunicorn --bind 0.0.0.0:$PORT app:app
